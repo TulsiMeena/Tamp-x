@@ -21,7 +21,7 @@ interface GuerrillaMailApiService {
     @GET("ajax.php?f=set_email_user")
     suspend fun setEmailUser(
         @Query("email_user") emailUser: String,
-        @Query("domain") domain: String? = null,
+        @Query("site") site: String? = null,
         @Query("sid_token") sidToken: String? = null
     ): GmSetUserResponse
 

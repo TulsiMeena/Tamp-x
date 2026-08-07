@@ -68,26 +68,61 @@ class TempMailRepository(
         return domain.contains("web-library.net") || domain.contains("mail.tm")
     }
 
+    private fun getSiteParam(domain: String): String? {
+        return when (domain.lowercase()) {
+            "sharklasers.com" -> "sharklasers.com"
+            "guerrillamail.com" -> "guerrillamail.com"
+            else -> null
+        }
+    }
+
     suspend fun createRandomMailbox(): MailboxEntity = withContext(Dispatchers.IO) {
         val prefixes = listOf("user", "mail", "alex", "john", "box", "inbox", "fast", "temp")
         val randomLogin = prefixes.random() + "_" + (100000..999999).random()
-        val domain = "guerrillamailblock.com"
+        val domain = "web-library.net"
+
+        val generatedPass = "pass_" + (100000..999999).random()
+        val fullAddress = "$randomLogin@$domain"
 
         var sidToken: String? = null
+        var passwordStr: String? = generatedPass
+
         try {
-            val response = guerrillaApiService.setEmailUser(randomLogin, domain)
-            sidToken = response.sidToken
+            mailTmApiService.createAccount(MailTmAccountRequest(fullAddress, generatedPass))
+            val tokenResp = mailTmApiService.getToken(MailTmAccountRequest(fullAddress, generatedPass))
+            sidToken = tokenResp.token
         } catch (e: Exception) {
             e.printStackTrace()
+            // Fallback to Guerrilla Mail if mail.tm fails
+            val gDomain = "sharklasers.com"
+            val gAddr = "$randomLogin@$gDomain"
+            try {
+                val response = guerrillaApiService.setEmailUser(randomLogin, site = getSiteParam(gDomain))
+                sidToken = response.sidToken
+            } catch (ex: Exception) {
+                ex.printStackTrace()
+            }
+            passwordStr = null
+            return@withContext MailboxEntity(
+                address = gAddr,
+                login = randomLogin,
+                domain = gDomain,
+                sidToken = sidToken,
+                password = null,
+                createdAt = System.currentTimeMillis(),
+                isActive = true
+            ).also {
+                dao.setActiveMailbox(it.address)
+                dao.insertMailbox(it)
+            }
         }
 
-        val fullAddress = "$randomLogin@$domain"
         val mailbox = MailboxEntity(
             address = fullAddress,
             login = randomLogin,
             domain = domain,
             sidToken = sidToken,
-            password = null,
+            password = passwordStr,
             createdAt = System.currentTimeMillis(),
             isActive = true
         )
@@ -117,7 +152,7 @@ class TempMailRepository(
             }
         } else {
             try {
-                val response = guerrillaApiService.setEmailUser(cleanLogin, domain)
+                val response = guerrillaApiService.setEmailUser(cleanLogin, site = getSiteParam(domain))
                 sidToken = response.sidToken
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -239,24 +274,40 @@ class TempMailRepository(
 
             // 2. Guerrilla Mail Engine
             var currentSidToken = mailbox.sidToken
-            if (currentSidToken.isNullOrBlank()) {
-                try {
-                    val setUserResp = guerrillaApiService.setEmailUser(mailbox.login, mailbox.domain)
+            try {
+                val setUserResp = guerrillaApiService.setEmailUser(
+                    emailUser = mailbox.login,
+                    site = getSiteParam(mailbox.domain),
+                    sidToken = currentSidToken
+                )
+                if (!setUserResp.sidToken.isNullOrBlank()) {
                     currentSidToken = setUserResp.sidToken
-                    if (!currentSidToken.isNullOrBlank()) {
-                        dao.insertMailbox(mailbox.copy(sidToken = currentSidToken))
-                    }
-                } catch (e: Exception) {
-                    e.printStackTrace()
+                    dao.insertMailbox(mailbox.copy(sidToken = currentSidToken))
                 }
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
 
             if (!currentSidToken.isNullOrBlank()) {
                 try {
-                    val gmListResp = guerrillaApiService.checkEmail(0, currentSidToken)
-                    val items = gmListResp.list ?: emptyList()
+                    val fetchedItems = mutableListOf<com.example.data.remote.GmMailSummaryDto>()
+                    try {
+                        val listResp = guerrillaApiService.getEmailList(0, currentSidToken)
+                        listResp.list?.let { fetchedItems.addAll(it) }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
 
-                    for (item in items) {
+                    try {
+                        val checkResp = guerrillaApiService.checkEmail(0, currentSidToken)
+                        checkResp.list?.let { fetchedItems.addAll(it) }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+
+                    val distinctItems = fetchedItems.distinctBy { it.mailId }
+
+                    for (item in distinctItems) {
                         val rawId = item.mailId?.toString() ?: continue
                         val intId = rawId.toIntOrNull() ?: rawId.hashCode()
 
