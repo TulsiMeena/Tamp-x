@@ -85,6 +85,8 @@ fun InboxScreen(
     val isOnline by viewModel.isOnline.collectAsState()
     val searchQuery by viewModel.searchQuery.collectAsState()
     val domains by viewModel.availableDomains.collectAsState()
+    val connectionStatus by viewModel.connectionStatus.collectAsState()
+    val lastSyncedTime by viewModel.lastSyncedTime.collectAsState()
 
     var showCustomDialog by remember { mutableStateOf(false) }
     var showQrDialog by remember { mutableStateOf(false) }
@@ -204,6 +206,8 @@ fun InboxScreen(
                     CopyEmailCard(
                         emailAddress = activeMailbox?.address ?: "",
                         isRefreshing = isRefreshing,
+                        connectionStatus = connectionStatus,
+                        lastSyncedTime = lastSyncedTime,
                         onCopyClick = {
                             val addr = activeMailbox?.address ?: ""
                             if (addr.isNotBlank()) {
@@ -325,7 +329,7 @@ private fun CustomEmailDialog(
     onCreate: (login: String, domain: String) -> Unit
 ) {
     val orderedDomains = remember(domains) {
-        val primary = listOf("1secmail.com", "1secmail.org", "1secmail.net")
+        val primary = listOf("guerrillamailblock.com", "sharklasers.com", "guerrillamail.com", "web-library.net")
         val sorted = domains.sortedByDescending { primary.contains(it) }
         if (sorted.isEmpty()) primary else sorted
     }

@@ -31,6 +31,12 @@ interface GuerrillaMailApiService {
         @Query("sid_token") sidToken: String
     ): GmListResponse
 
+    @GET("ajax.php?f=check_email")
+    suspend fun checkEmail(
+        @Query("seq") seq: Long = 0,
+        @Query("sid_token") sidToken: String
+    ): GmListResponse
+
     @GET("ajax.php?f=fetch_email")
     suspend fun fetchEmail(
         @Query("email_id") emailId: String,

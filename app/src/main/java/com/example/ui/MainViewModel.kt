@@ -57,6 +57,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
 
+    private val _lastSyncedTime = MutableStateFlow("Syncing...")
+    val lastSyncedTime: StateFlow<String> = _lastSyncedTime.asStateFlow()
+
+    private val _connectionStatus = MutableStateFlow("Connected to Live Engine")
+    val connectionStatus: StateFlow<String> = _connectionStatus.asStateFlow()
+
     private val _isAiAnalyzing = MutableStateFlow(false)
     val isAiAnalyzing: StateFlow<Boolean> = _isAiAnalyzing.asStateFlow()
 
@@ -136,12 +142,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     val mailbox = activeMailbox.value
                     if (mailbox != null) {
                         _isRefreshing.value = true
-                        repository.refreshInbox(
+                        val res = repository.refreshInbox(
                             mailbox = mailbox,
                             autoAiSummarize = autoAiSummarize.value,
                             showNotifications = pushNotificationsEnabled.value
                         )
                         _isRefreshing.value = false
+                        res.onSuccess {
+                            _connectionStatus.value = "🟢 Connected (Live ${mailbox.domain})"
+                            val timeStr = java.text.SimpleDateFormat("hh:mm:ss a", java.util.Locale.getDefault()).format(java.util.Date())
+                            _lastSyncedTime.value = timeStr
+                        }.onFailure {
+                            _connectionStatus.value = "⚠️ Reconnecting..."
+                        }
                     }
                 }
 
@@ -166,10 +179,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _isRefreshing.value = false
 
             result.onSuccess { newCount ->
-                val msg = if (newCount > 0) "Received $newCount new message(s)!" else "Inbox is up to date."
+                _connectionStatus.value = "🟢 Connected (Live ${mailbox.domain})"
+                val timeStr = java.text.SimpleDateFormat("hh:mm:ss a", java.util.Locale.getDefault()).format(java.util.Date())
+                _lastSyncedTime.value = timeStr
+                val msg = if (newCount > 0) "Received $newCount new message(s)!" else "Inbox up to date (Checked $timeStr)."
                 Toast.makeText(getApplication(), msg, Toast.LENGTH_SHORT).show()
             }.onFailure {
-                Toast.makeText(getApplication(), "Failed to check inbox. Check network.", Toast.LENGTH_SHORT).show()
+                _connectionStatus.value = "⚠️ Network Error"
+                Toast.makeText(getApplication(), "Failed to check inbox. Check internet connection.", Toast.LENGTH_SHORT).show()
             }
         }
     }

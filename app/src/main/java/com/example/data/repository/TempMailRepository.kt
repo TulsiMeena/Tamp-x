@@ -5,6 +5,8 @@ import com.example.data.local.MailboxEntity
 import com.example.data.local.TempMailDao
 import com.example.data.remote.GeminiApiService
 import com.example.data.remote.GuerrillaMailApiService
+import com.example.data.remote.MailTmAccountRequest
+import com.example.data.remote.MailTmApiService
 import com.example.data.remote.TempMailApiService
 import com.example.util.NotificationHelper
 import com.squareup.moshi.Moshi
@@ -18,6 +20,7 @@ class TempMailRepository(
     private val dao: TempMailDao,
     private val apiService: TempMailApiService = TempMailApiService.create(),
     private val guerrillaApiService: GuerrillaMailApiService = GuerrillaMailApiService.create(),
+    private val mailTmApiService: MailTmApiService = MailTmApiService.create(),
     private val geminiService: GeminiApiService,
     private val notificationHelper: NotificationHelper
 ) {
@@ -39,11 +42,7 @@ class TempMailRepository(
     }
 
     suspend fun getAvailableDomains(): List<String> = withContext(Dispatchers.IO) {
-        defaultDomains()
-    }
-
-    private fun defaultDomains(): List<String> {
-        return listOf(
+        val defaultList = mutableListOf(
             "guerrillamailblock.com",
             "guerrillamail.com",
             "sharklasers.com",
@@ -52,14 +51,25 @@ class TempMailRepository(
             "grr.la",
             "pokemail.net",
             "spam4.me",
-            "1secmail.com",
-            "1secmail.org",
-            "1secmail.net"
+            "web-library.net"
         )
+        try {
+            val mailTmDomains = mailTmApiService.getDomains().member?.mapNotNull { it.domain } ?: emptyList()
+            mailTmDomains.forEach { d ->
+                if (!defaultList.contains(d)) defaultList.add(d)
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        defaultList
+    }
+
+    private fun isMailTmDomain(domain: String): Boolean {
+        return domain.contains("web-library.net") || domain.contains("mail.tm")
     }
 
     suspend fun createRandomMailbox(): MailboxEntity = withContext(Dispatchers.IO) {
-        val prefixes = listOf("user", "mail", "alex", "john", "box", "inbox", "fast")
+        val prefixes = listOf("user", "mail", "alex", "john", "box", "inbox", "fast", "temp")
         val randomLogin = prefixes.random() + "_" + (100000..999999).random()
         val domain = "guerrillamailblock.com"
 
@@ -77,6 +87,7 @@ class TempMailRepository(
             login = randomLogin,
             domain = domain,
             sidToken = sidToken,
+            password = null,
             createdAt = System.currentTimeMillis(),
             isActive = true
         )
@@ -91,11 +102,26 @@ class TempMailRepository(
             .ifBlank { "user_" + (100000..999999).random() }
 
         var sidToken: String? = null
-        try {
-            val response = guerrillaApiService.setEmailUser(cleanLogin, domain)
-            sidToken = response.sidToken
-        } catch (e: Exception) {
-            e.printStackTrace()
+        var passwordStr: String? = null
+
+        if (isMailTmDomain(domain)) {
+            val generatedPass = "pass_" + (100000..999999).random()
+            val fullAddr = "$cleanLogin@$domain"
+            try {
+                mailTmApiService.createAccount(MailTmAccountRequest(fullAddr, generatedPass))
+                val tokenResp = mailTmApiService.getToken(MailTmAccountRequest(fullAddr, generatedPass))
+                sidToken = tokenResp.token
+                passwordStr = generatedPass
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        } else {
+            try {
+                val response = guerrillaApiService.setEmailUser(cleanLogin, domain)
+                sidToken = response.sidToken
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
 
         val fullAddress = "$cleanLogin@$domain"
@@ -104,6 +130,7 @@ class TempMailRepository(
             login = cleanLogin,
             domain = domain,
             sidToken = sidToken,
+            password = passwordStr,
             createdAt = System.currentTimeMillis(),
             isActive = true
         )
@@ -132,56 +159,51 @@ class TempMailRepository(
             val existingIds = existingEmails.map { it.id }.toSet()
             var newCount = 0
 
-            // 1. Try Guerrilla Mail API
-            var currentSidToken = mailbox.sidToken
-            if (currentSidToken.isNullOrBlank()) {
-                try {
-                    val setUserResp = guerrillaApiService.setEmailUser(mailbox.login, mailbox.domain)
-                    currentSidToken = setUserResp.sidToken
-                    if (!currentSidToken.isNullOrBlank()) {
-                        dao.insertMailbox(mailbox.copy(sidToken = currentSidToken))
+            // 1. Mail.tm Engine
+            if (isMailTmDomain(mailbox.domain)) {
+                var jwtToken = mailbox.sidToken
+                if (jwtToken.isNullOrBlank() && !mailbox.password.isNullOrBlank()) {
+                    try {
+                        val tokenResp = mailTmApiService.getToken(
+                            MailTmAccountRequest(mailbox.address, mailbox.password)
+                        )
+                        jwtToken = tokenResp.token
+                        if (!jwtToken.isNullOrBlank()) {
+                            dao.insertMailbox(mailbox.copy(sidToken = jwtToken))
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
                     }
-                } catch (e: Exception) {
-                    e.printStackTrace()
                 }
-            }
 
-            if (!currentSidToken.isNullOrBlank()) {
-                try {
-                    val gmListResp = guerrillaApiService.getEmailList(0, currentSidToken)
-                    val items = gmListResp.list ?: emptyList()
-
-                    for (item in items) {
-                        val rawId = item.mailId?.toString() ?: continue
-                        val intId = rawId.toIntOrNull() ?: rawId.hashCode()
+                if (!jwtToken.isNullOrBlank()) {
+                    val messages = mailTmApiService.getMessages("Bearer $jwtToken").member ?: emptyList()
+                    for (msg in messages) {
+                        val rawId = msg.id ?: continue
+                        val intId = rawId.hashCode()
 
                         if (!existingIds.contains(intId)) {
                             newCount++
-                            // Fetch full message detail
                             val detail = try {
-                                guerrillaApiService.fetchEmail(rawId, currentSidToken)
+                                mailTmApiService.getMessageDetail(rawId, "Bearer $jwtToken")
                             } catch (e: Exception) {
                                 null
                             }
 
-                            val safeFrom = (detail?.mailFrom ?: item.mailFrom)?.ifBlank { "Unknown Sender" } ?: "Unknown Sender"
-                            val safeSubject = (detail?.mailSubject ?: item.mailSubject)?.ifBlank { "(No Subject)" } ?: "(No Subject)"
-                            val safeDate = detail?.mailDate ?: item.mailDate ?: "Just Now"
+                            val safeFrom = (detail?.from?.address ?: msg.from?.address)?.ifBlank { "Unknown Sender" } ?: "Unknown Sender"
+                            val safeSubject = (detail?.subject ?: msg.subject)?.ifBlank { "(No Subject)" } ?: "(No Subject)"
+                            val safeDate = detail?.createdAt ?: msg.createdAt ?: "Just Now"
 
-                            val rawBody = detail?.mailBody ?: item.mailBody ?: item.mailExcerpt ?: ""
-                            val bodyHtml = if (rawBody.contains("<") && rawBody.contains(">")) rawBody else ""
-                            val bodyText = if (bodyHtml.isNotBlank()) rawBody.replace(Regex("<[^>]*>"), "") else rawBody
+                            val bodyText = detail?.text ?: detail?.intro ?: msg.intro ?: ""
+                            val bodyHtml = detail?.html?.firstOrNull() ?: ""
 
-                            // Perform AI analysis
                             val aiResult = if (autoAiSummarize) {
                                 try {
                                     geminiService.analyzeEmail(safeSubject, safeFrom, bodyText.ifBlank { bodyHtml })
                                 } catch (e: Exception) {
                                     null
                                 }
-                            } else {
-                                null
-                            }
+                            } else null
 
                             val emailEntity = EmailEntity(
                                 id = intId,
@@ -204,7 +226,86 @@ class TempMailRepository(
 
                             if (showNotifications) {
                                 notificationHelper.sendNewEmailNotification(
-                                    title = "New Temp Email from $safeFrom",
+                                    title = "New Email from $safeFrom",
+                                    message = safeSubject,
+                                    emailId = intId
+                                )
+                            }
+                        }
+                    }
+                    return@withContext Result.success(newCount)
+                }
+            }
+
+            // 2. Guerrilla Mail Engine
+            var currentSidToken = mailbox.sidToken
+            if (currentSidToken.isNullOrBlank()) {
+                try {
+                    val setUserResp = guerrillaApiService.setEmailUser(mailbox.login, mailbox.domain)
+                    currentSidToken = setUserResp.sidToken
+                    if (!currentSidToken.isNullOrBlank()) {
+                        dao.insertMailbox(mailbox.copy(sidToken = currentSidToken))
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+
+            if (!currentSidToken.isNullOrBlank()) {
+                try {
+                    val gmListResp = guerrillaApiService.checkEmail(0, currentSidToken)
+                    val items = gmListResp.list ?: emptyList()
+
+                    for (item in items) {
+                        val rawId = item.mailId?.toString() ?: continue
+                        val intId = rawId.toIntOrNull() ?: rawId.hashCode()
+
+                        if (!existingIds.contains(intId)) {
+                            newCount++
+                            val detail = try {
+                                guerrillaApiService.fetchEmail(rawId, currentSidToken)
+                            } catch (e: Exception) {
+                                null
+                            }
+
+                            val safeFrom = (detail?.mailFrom ?: item.mailFrom)?.ifBlank { "Unknown Sender" } ?: "Unknown Sender"
+                            val safeSubject = (detail?.mailSubject ?: item.mailSubject)?.ifBlank { "(No Subject)" } ?: "(No Subject)"
+                            val safeDate = detail?.mailDate ?: item.mailDate ?: "Just Now"
+
+                            val rawBody = detail?.mailBody ?: item.mailBody ?: item.mailExcerpt ?: ""
+                            val bodyHtml = if (rawBody.contains("<") && rawBody.contains(">")) rawBody else ""
+                            val bodyText = if (bodyHtml.isNotBlank()) rawBody.replace(Regex("<[^>]*>"), "") else rawBody
+
+                            val aiResult = if (autoAiSummarize) {
+                                try {
+                                    geminiService.analyzeEmail(safeSubject, safeFrom, bodyText.ifBlank { bodyHtml })
+                                } catch (e: Exception) {
+                                    null
+                                }
+                            } else null
+
+                            val emailEntity = EmailEntity(
+                                id = intId,
+                                mailboxAddress = mailbox.address,
+                                from = safeFrom,
+                                subject = safeSubject,
+                                date = safeDate,
+                                timestamp = System.currentTimeMillis(),
+                                bodyHtml = bodyHtml,
+                                bodyText = bodyText,
+                                isRead = false,
+                                aiSummary = aiResult?.summary,
+                                aiSpamScore = aiResult?.spamScore,
+                                aiSpamReason = aiResult?.spamReason,
+                                aiSmartRepliesJson = aiResult?.smartReplies?.let { stringListAdapter.toJson(it) },
+                                attachmentsJson = null
+                            )
+
+                            dao.insertEmail(emailEntity)
+
+                            if (showNotifications) {
+                                notificationHelper.sendNewEmailNotification(
+                                    title = "New Email from $safeFrom",
                                     message = safeSubject,
                                     emailId = intId
                                 )
@@ -218,68 +319,6 @@ class TempMailRepository(
                 }
             }
 
-            // 2. Fallback to 1secmail API if Guerrilla Mail wasn't used or failed
-            try {
-                val remoteMessages = apiService.getMessages(mailbox.login, mailbox.domain)
-                for (msg in remoteMessages) {
-                    val isNew = !existingIds.contains(msg.id)
-                    if (isNew) {
-                        newCount++
-                        val detail = try {
-                            apiService.readMessage(mailbox.login, mailbox.domain, msg.id)
-                        } catch (e: Exception) {
-                            null
-                        }
-
-                        val safeFrom = msg.from?.ifBlank { "Unknown Sender" } ?: "Unknown Sender"
-                        val safeSubject = msg.subject?.ifBlank { "(No Subject)" } ?: "(No Subject)"
-                        val safeDate = msg.date ?: ""
-
-                        val bodyHtml = detail?.htmlBody ?: detail?.body ?: ""
-                        val bodyText = detail?.textBody ?: detail?.body ?: ""
-
-                        val aiResult = if (autoAiSummarize) {
-                            try {
-                                geminiService.analyzeEmail(safeSubject, safeFrom, bodyText.ifBlank { bodyHtml })
-                            } catch (e: Exception) {
-                                null
-                            }
-                        } else {
-                            null
-                        }
-
-                        val emailEntity = EmailEntity(
-                            id = msg.id,
-                            mailboxAddress = mailbox.address,
-                            from = safeFrom,
-                            subject = safeSubject,
-                            date = safeDate,
-                            timestamp = System.currentTimeMillis(),
-                            bodyHtml = bodyHtml,
-                            bodyText = bodyText,
-                            isRead = false,
-                            aiSummary = aiResult?.summary,
-                            aiSpamScore = aiResult?.spamScore,
-                            aiSpamReason = aiResult?.spamReason,
-                            aiSmartRepliesJson = aiResult?.smartReplies?.let { stringListAdapter.toJson(it) },
-                            attachmentsJson = null
-                        )
-
-                        dao.insertEmail(emailEntity)
-
-                        if (showNotifications) {
-                            notificationHelper.sendNewEmailNotification(
-                                title = "New Temp Email from $safeFrom",
-                                message = safeSubject,
-                                emailId = msg.id
-                            )
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-
             Result.success(newCount)
         } catch (e: Exception) {
             Result.failure(e)
@@ -287,38 +326,7 @@ class TempMailRepository(
     }
 
     suspend fun fetchEmailContentIfNeeded(email: EmailEntity): EmailEntity = withContext(Dispatchers.IO) {
-        if (email.bodyText.isNotBlank() || email.bodyHtml.isNotBlank()) {
-            return@withContext email
-        }
-
-        val mailbox = dao.getAllMailboxes() // fallback sync lookup or parse login/domain from address
-        val parts = email.mailboxAddress.split("@")
-        if (parts.size != 2) return@withContext email
-
-        val login = parts[0]
-        val domain = parts[1]
-
-        try {
-            val detail = apiService.readMessage(login, domain, email.id)
-            val bodyHtml = detail.htmlBody ?: detail.body ?: ""
-            val bodyText = detail.textBody ?: detail.body ?: ""
-
-            val aiResult = geminiService.analyzeEmail(email.subject, email.from, bodyText.ifBlank { bodyHtml })
-
-            val updated = email.copy(
-                bodyHtml = bodyHtml,
-                bodyText = bodyText,
-                aiSummary = aiResult.summary,
-                aiSpamScore = aiResult.spamScore,
-                aiSpamReason = aiResult.spamReason,
-                aiSmartRepliesJson = stringListAdapter.toJson(aiResult.smartReplies)
-            )
-
-            dao.insertEmail(updated)
-            updated
-        } catch (e: Exception) {
-            email
-        }
+        email
     }
 
     suspend fun markEmailAsRead(id: Int, address: String) = withContext(Dispatchers.IO) {

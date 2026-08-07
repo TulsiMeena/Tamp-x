@@ -9,6 +9,7 @@ data class MailboxEntity(
     val login: String,
     val domain: String,
     val sidToken: String? = null,
+    val password: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
     val isActive: Boolean = false
 )

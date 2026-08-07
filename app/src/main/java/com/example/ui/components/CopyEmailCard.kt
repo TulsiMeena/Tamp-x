@@ -53,6 +53,8 @@ import androidx.compose.ui.unit.dp
 fun CopyEmailCard(
     emailAddress: String,
     isRefreshing: Boolean,
+    connectionStatus: String = "🟢 Connected to Live Engine",
+    lastSyncedTime: String = "",
     onCopyClick: () -> Unit,
     onGenerateNewClick: () -> Unit,
     onCreateCustomClick: () -> Unit,
@@ -207,7 +209,29 @@ fun CopyEmailCard(
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = connectionStatus,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontWeight = FontWeight.Medium
+                )
+                if (lastSyncedTime.isNotBlank()) {
+                    Text(
+                        text = "Synced $lastSyncedTime",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(14.dp))
 
             // Action Buttons Row
             Row(

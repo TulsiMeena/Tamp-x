@@ -152,7 +152,7 @@ fun EmptyInboxView(
                 )
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = "• For highest compatibility with Gmail/Outlook, use @1secmail.com or @1secmail.org domain extensions.\n• Messages from external senders usually arrive in 5–15 seconds.\n• Verification OTP codes and confirmation links are highlighted automatically in blue.",
+                    text = "• Send any email from Gmail/Yahoo/Outlook to your temporary address above.\n• Messages usually arrive within 3–10 seconds.\n• For instant deliverability, use @guerrillamailblock.com, @sharklasers.com, or @web-library.net.\n• OTP verification codes are extracted and highlighted automatically.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
