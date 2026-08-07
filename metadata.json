@@ -1,0 +1,6 @@
+{
+  "name": "Temp Mail AI",
+  "description": "Fast, secure temporary email address generator with AI smart summaries, spam detection, auto-refresh inbox, and offline access.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
