@@ -15,6 +15,7 @@ class NotificationHelper(private val context: Context) {
     companion object {
         const val CHANNEL_ID = "temp_mail_ai_channel"
         const val CHANNEL_NAME = "Incoming Temp Emails"
+        const val WELCOME_NOTIFICATION_ID = 9999
     }
 
     init {
@@ -28,11 +29,45 @@ class NotificationHelper(private val context: Context) {
                 CHANNEL_NAME,
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
-                description = "Notifications for newly received temporary emails."
+                description = "Notifications for Temp Mail AI & welcome alerts."
                 enableVibration(true)
             }
             val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             manager.createNotificationChannel(channel)
+        }
+    }
+
+    fun sendWelcomeNotification(ownerName: String = "Amit Meena") {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+
+        val pendingIntent = PendingIntent.getActivity(
+            context,
+            WELCOME_NOTIFICATION_ID,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val title = "Welcome to Temp Mail AI! 🎉"
+        val shortText = "Owner: $ownerName • Your private disposable inbox is active"
+        val bigText = "Welcome to Temp Mail AI!\nApp Owner & Creator: $ownerName\nआपका सुरक्षित और प्राइवेट डिस्पोजेबल ईमेल तैयार है। OTP और वेरिफिकेशन लिंक तुरंत प्राप्त करें।"
+
+        val builder = NotificationCompat.Builder(context, CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_dialog_email)
+            .setContentTitle(title)
+            .setContentText(shortText)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(bigText))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .setContentIntent(pendingIntent)
+
+        try {
+            NotificationManagerCompat.from(context).notify(WELCOME_NOTIFICATION_ID, builder.build())
+        } catch (e: SecurityException) {
+            // Permission missing
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 
