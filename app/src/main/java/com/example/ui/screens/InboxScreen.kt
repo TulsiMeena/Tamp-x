@@ -4,8 +4,8 @@ import android.Manifest
 import android.os.Build
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -20,7 +20,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.AlternateEmail
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.History
@@ -52,7 +52,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -64,6 +63,7 @@ import com.example.ui.components.CopyEmailCard
 import com.example.ui.components.EmailListItem
 import com.example.ui.components.EmptyInboxView
 import com.example.ui.components.QrCodeDialog
+import com.example.ui.theme.JetBrainsMonoFontFamily
 import com.google.accompanist.permissions.ExperimentalPermissionsApi
 import com.google.accompanist.permissions.isGranted
 import com.google.accompanist.permissions.rememberPermissionState
@@ -113,28 +113,27 @@ fun InboxScreen(
                             shape = RoundedCornerShape(10.dp)
                         ) {
                             Icon(
-                                imageVector = Icons.Default.AutoAwesome,
-                                contentDescription = "AI Logo",
+                                imageVector = Icons.Default.AlternateEmail,
+                                contentDescription = "TempMail Console",
                                 tint = MaterialTheme.colorScheme.onPrimary,
                                 modifier = Modifier
-                                    .padding(6.dp)
-                                    .size(20.dp)
+                                    .padding(7.dp)
+                                    .size(18.dp)
                             )
                         }
                         Spacer(modifier = Modifier.width(10.dp))
                         Column {
                             Text(
-                                text = "Temp Mail AI",
-                                style = MaterialTheme.typography.titleLarge,
+                                text = "TempMail Console",
+                                style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold
                             )
-                            if (!isOnline) {
-                                Text(
-                                    text = "Offline Mode (Cached Data)",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.error
-                                )
-                            }
+                            Text(
+                                text = if (!isOnline) "OFFLINE CACHE" else "DEV • AMIT MEENA",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (!isOnline) MaterialTheme.colorScheme.error
+                                else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
                 },
@@ -170,7 +169,6 @@ fun InboxScreen(
                 .padding(paddingValues)
                 .background(MaterialTheme.colorScheme.background)
         ) {
-            // Offline Banner
             if (!isOnline) {
                 Surface(
                     color = MaterialTheme.colorScheme.errorContainer,
@@ -188,8 +186,8 @@ fun InboxScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "No internet connection. Viewing offline cached emails.",
-                            style = MaterialTheme.typography.labelMedium,
+                            text = "Offline — Displaying locally cached messages.",
+                            style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onErrorContainer
                         )
                     }
@@ -199,9 +197,9 @@ fun InboxScreen(
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
                 contentPadding = PaddingValues(16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                // Top Copy Email Banner Card
+                // Top SMTP Mailbox Console Card
                 item {
                     CopyEmailCard(
                         emailAddress = activeMailbox?.address ?: "",
@@ -212,7 +210,7 @@ fun InboxScreen(
                             val addr = activeMailbox?.address ?: ""
                             if (addr.isNotBlank()) {
                                 clipboardManager.setText(AnnotatedString(addr))
-                                Toast.makeText(context, "Copied email: $addr", Toast.LENGTH_SHORT).show()
+                                Toast.makeText(context, "Copied: $addr", Toast.LENGTH_SHORT).show()
                             }
                         },
                         onGenerateNewClick = { viewModel.generateRandomMailbox() },
@@ -223,16 +221,22 @@ fun InboxScreen(
                     )
                 }
 
-                // Search Bar
+                // Filter / Search Input
                 item {
                     OutlinedTextField(
                         value = searchQuery,
                         onValueChange = { viewModel.onSearchQueryChanged(it) },
-                        placeholder = { Text("Search subject, sender, content...") },
+                        placeholder = {
+                            Text(
+                                "Filter by sender, OTP code, or subject...",
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        },
                         leadingIcon = {
                             Icon(
                                 imageVector = Icons.Default.Search,
-                                contentDescription = "Search"
+                                contentDescription = "Search",
+                                modifier = Modifier.size(18.dp)
                             )
                         },
                         trailingIcon = {
@@ -246,40 +250,59 @@ fun InboxScreen(
                             }
                         },
                         singleLine = true,
-                        shape = RoundedCornerShape(16.dp),
+                        shape = RoundedCornerShape(12.dp),
                         modifier = Modifier
                             .fillMaxWidth()
                             .testTag("search_text_field")
                     )
                 }
 
-                // Header title for list
+                // Inbox List Header
                 item {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            text = "Inbox (${activeEmails.size})",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = "INCOMING MESSAGES",
+                                style = MaterialTheme.typography.labelMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Surface(
+                                color = MaterialTheme.colorScheme.surfaceVariant,
+                                shape = RoundedCornerShape(6.dp)
+                            ) {
+                                Text(
+                                    text = "${activeEmails.size}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
                         if (activeEmails.isNotEmpty()) {
                             TextButton(onClick = { viewModel.clearActiveInbox() }) {
-                                Text("Clear Inbox", color = MaterialTheme.colorScheme.error)
+                                Text(
+                                    "Purge All",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.error
+                                )
                             }
                         }
                     }
                 }
 
-                // Email List or Empty State
+                // Real Emails List or SMTP Listener Empty Console
                 if (activeEmails.isEmpty()) {
                     item {
                         EmptyInboxView(
                             emailAddress = activeMailbox?.address ?: "",
-                            onSendTestEmailClick = { viewModel.sendTestVerificationEmail() }
+                            onRefreshInboxClick = { viewModel.manualRefreshInbox() }
                         )
                     }
                 } else {
@@ -328,35 +351,40 @@ private fun CustomEmailDialog(
     onDismiss: () -> Unit,
     onCreate: (login: String, domain: String) -> Unit
 ) {
-    val orderedDomains = remember(domains) {
-        val primary = listOf("guerrillamailblock.com", "sharklasers.com", "guerrillamail.com", "web-library.net")
-        val sorted = domains.sortedByDescending { primary.contains(it) }
-        if (sorted.isEmpty()) primary else sorted
+    val displayDomains = remember(domains) {
+        if (domains.isNotEmpty()) domains
+        else listOf("sharklasers.com", "guerrillamailblock.com", "grr.la")
     }
 
     var loginInput by remember { mutableStateOf("") }
-    var selectedDomain by remember { mutableStateOf(orderedDomains.first()) }
+    var selectedDomain by remember(displayDomains) { mutableStateOf(displayDomains.first()) }
     var expandedDomainMenu by remember { mutableStateOf(false) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Create Custom Email") },
+        title = {
+            Text(
+                text = "Create Custom Mailbox",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
+        },
         text = {
             Column {
                 Text(
-                    text = "Choose your custom username and domain extension:",
+                    text = "Configure your custom username and select a live receiving domain:",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Spacer(modifier = Modifier.height(12.dp))
+                Spacer(modifier = Modifier.height(14.dp))
 
                 OutlinedTextField(
                     value = loginInput,
                     onValueChange = { loginInput = it },
-                    label = { Text("Username / Alias") },
-                    placeholder = { Text("e.g. john.test") },
+                    label = { Text("Username / Handle") },
+                    placeholder = { Text("e.g. amit.verify") },
                     singleLine = true,
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(10.dp),
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("custom_username_input")
@@ -373,9 +401,10 @@ private fun CustomEmailDialog(
                         value = "@$selectedDomain",
                         onValueChange = {},
                         readOnly = true,
-                        label = { Text("Domain Extension") },
+                        label = { Text("SMTP Domain") },
+                        textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = JetBrainsMonoFontFamily),
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expandedDomainMenu) },
-                        shape = RoundedCornerShape(12.dp),
+                        shape = RoundedCornerShape(10.dp),
                         modifier = Modifier
                             .menuAnchor(MenuAnchorType.PrimaryNotEditable, true)
                             .fillMaxWidth()
@@ -384,9 +413,29 @@ private fun CustomEmailDialog(
                         expanded = expandedDomainMenu,
                         onDismissRequest = { expandedDomainMenu = false }
                     ) {
-                        orderedDomains.forEach { domain ->
+                        displayDomains.forEachIndexed { index, domain ->
                             DropdownMenuItem(
-                                text = { Text("@$domain") },
+                                text = {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "@$domain",
+                                            style = MaterialTheme.typography.bodyMedium.copy(
+                                                fontFamily = JetBrainsMonoFontFamily
+                                            )
+                                        )
+                                        if (index < 2) {
+                                            Text(
+                                                text = "OTP READY",
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                    }
+                                },
                                 onClick = {
                                     selectedDomain = domain
                                     expandedDomainMenu = false
@@ -405,10 +454,10 @@ private fun CustomEmailDialog(
                     }
                 },
                 enabled = loginInput.isNotBlank(),
-                shape = RoundedCornerShape(12.dp),
+                shape = RoundedCornerShape(10.dp),
                 modifier = Modifier.testTag("confirm_custom_email_button")
             ) {
-                Text("Create Email")
+                Text("Deploy Address")
             }
         },
         dismissButton = {

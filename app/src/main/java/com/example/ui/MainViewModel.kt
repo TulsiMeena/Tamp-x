@@ -57,10 +57,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _isRefreshing = MutableStateFlow(false)
     val isRefreshing: StateFlow<Boolean> = _isRefreshing.asStateFlow()
 
-    private val _lastSyncedTime = MutableStateFlow("Syncing...")
+    private val _lastSyncedTime = MutableStateFlow("READY")
     val lastSyncedTime: StateFlow<String> = _lastSyncedTime.asStateFlow()
 
-    private val _connectionStatus = MutableStateFlow("Connected to Live Engine")
+    private val _connectionStatus = MutableStateFlow("SMTP NODE ONLINE")
     val connectionStatus: StateFlow<String> = _connectionStatus.asStateFlow()
 
     private val _isAiAnalyzing = MutableStateFlow(false)
@@ -72,7 +72,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val autoRefreshEnabled = preferencesManager.autoRefreshEnabled
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
     val autoRefreshInterval = preferencesManager.autoRefreshInterval
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 10)
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 5)
     val pushNotificationsEnabled = preferencesManager.pushNotificationsEnabled
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), true)
     val autoAiSummarize = preferencesManager.autoAiSummarize
@@ -109,15 +109,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         viewModelScope.launch {
+            repository.purgeFakeAndWelcomeEmails()
+
             val domains = repository.getAvailableDomains()
             availableDomains.value = domains
 
-            // Create initial mailbox if none exists
+            // Create initial mailbox if none exists or if previous domain was retired
             var currentActive = repository.activeMailbox.first()
-            if (currentActive == null) {
+            if (currentActive == null || (currentActive.domain == "web-library.net" && currentActive.sidToken.isNullOrBlank())) {
                 currentActive = repository.createRandomMailbox()
             }
-            
+
             // Immediate initial inbox sync
             _isRefreshing.value = true
             repository.refreshInbox(
@@ -125,6 +127,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 autoAiSummarize = autoAiSummarize.value,
                 showNotifications = pushNotificationsEnabled.value
             )
+            _connectionStatus.value = "SMTP LIVE • @${currentActive.domain}"
+            val timeStr = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
+            _lastSyncedTime.value = timeStr
             _isRefreshing.value = false
         }
 
@@ -136,7 +141,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         autoRefreshJob = viewModelScope.launch {
             while (true) {
                 val isEnabled = autoRefreshEnabled.value
-                val interval = autoRefreshInterval.value.coerceAtLeast(3)
+                val interval = autoRefreshInterval.value.coerceAtLeast(4)
 
                 if (isEnabled && isOnline.value) {
                     val mailbox = activeMailbox.value
@@ -149,11 +154,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         )
                         _isRefreshing.value = false
                         res.onSuccess {
-                            _connectionStatus.value = "🟢 Connected (Live ${mailbox.domain})"
-                            val timeStr = java.text.SimpleDateFormat("hh:mm:ss a", java.util.Locale.getDefault()).format(java.util.Date())
+                            _connectionStatus.value = "SMTP LIVE • @${mailbox.domain}"
+                            val timeStr = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
                             _lastSyncedTime.value = timeStr
                         }.onFailure {
-                            _connectionStatus.value = "⚠️ Reconnecting..."
+                            _connectionStatus.value = "RECONNECTING SMTP..."
                         }
                     }
                 }
@@ -179,14 +184,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _isRefreshing.value = false
 
             result.onSuccess { newCount ->
-                _connectionStatus.value = "🟢 Connected (Live ${mailbox.domain})"
-                val timeStr = java.text.SimpleDateFormat("hh:mm:ss a", java.util.Locale.getDefault()).format(java.util.Date())
+                _connectionStatus.value = "SMTP LIVE • @${mailbox.domain}"
+                val timeStr = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
                 _lastSyncedTime.value = timeStr
-                val msg = if (newCount > 0) "Received $newCount new message(s)!" else "Inbox up to date (Checked $timeStr)."
+                val msg = if (newCount > 0) "Received $newCount new message(s)!" else "Inbox synced ($timeStr) — No new messages yet."
                 Toast.makeText(getApplication(), msg, Toast.LENGTH_SHORT).show()
             }.onFailure {
-                _connectionStatus.value = "⚠️ Network Error"
-                Toast.makeText(getApplication(), "Failed to check inbox. Check internet connection.", Toast.LENGTH_SHORT).show()
+                _connectionStatus.value = "NETWORK ERROR"
+                Toast.makeText(getApplication(), "Failed to sync inbox. Check connection.", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -196,8 +201,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _isRefreshing.value = true
             val mailbox = repository.createRandomMailbox()
             repository.refreshInbox(mailbox, autoAiSummarize.value, pushNotificationsEnabled.value)
+            _connectionStatus.value = "SMTP LIVE • @${mailbox.domain}"
+            val timeStr = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
+            _lastSyncedTime.value = timeStr
             _isRefreshing.value = false
-            Toast.makeText(getApplication(), "Generated: ${mailbox.address}", Toast.LENGTH_SHORT).show()
+            Toast.makeText(getApplication(), "Active: ${mailbox.address}", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -206,8 +214,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _isRefreshing.value = true
             val mailbox = repository.createCustomMailbox(login, domain)
             repository.refreshInbox(mailbox, autoAiSummarize.value, pushNotificationsEnabled.value)
+            _connectionStatus.value = "SMTP LIVE • @${mailbox.domain}"
+            val timeStr = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
+            _lastSyncedTime.value = timeStr
             _isRefreshing.value = false
-            Toast.makeText(getApplication(), "Created: ${mailbox.address}", Toast.LENGTH_SHORT).show()
+            Toast.makeText(getApplication(), "Active: ${mailbox.address}", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -216,7 +227,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             repository.switchActiveMailbox(address)
             val mailbox = repository.activeMailbox.first()
             if (mailbox != null) {
+                _isRefreshing.value = true
                 repository.refreshInbox(mailbox, autoAiSummarize.value, pushNotificationsEnabled.value)
+                _connectionStatus.value = "SMTP LIVE • @${mailbox.domain}"
+                _isRefreshing.value = false
             }
         }
     }
@@ -242,7 +256,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun deleteEmail(id: Int, address: String) {
         viewModelScope.launch {
             repository.deleteEmail(id, address)
-            Toast.makeText(getApplication(), "Email deleted.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(getApplication(), "Message deleted", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -250,15 +264,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             val address = activeMailbox.value?.address ?: return@launch
             repository.clearMailboxEmails(address)
-            Toast.makeText(getApplication(), "Inbox cleared.", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    fun sendTestVerificationEmail() {
-        viewModelScope.launch {
-            val address = activeMailbox.value?.address ?: return@launch
-            repository.injectTestVerificationEmail(address)
-            Toast.makeText(getApplication(), "Test verification email sent to inbox!", Toast.LENGTH_SHORT).show()
+            Toast.makeText(getApplication(), "Inbox cleared", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -267,7 +273,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _isAiAnalyzing.value = true
             repository.reanalyzeWithAi(email)
             _isAiAnalyzing.value = false
-            Toast.makeText(getApplication(), "Gemini AI analysis updated!", Toast.LENGTH_SHORT).show()
+            Toast.makeText(getApplication(), "Security inspection updated", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -296,7 +302,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             repository.clearAllData()
             generateRandomMailbox()
-            Toast.makeText(getApplication(), "All data cleared.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(getApplication(), "Local cache & mailboxes reset", Toast.LENGTH_SHORT).show()
         }
     }
 }

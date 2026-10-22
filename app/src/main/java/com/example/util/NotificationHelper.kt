@@ -49,9 +49,9 @@ class NotificationHelper(private val context: Context) {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val title = "Welcome to Temp Mail AI! 🎉"
-        val shortText = "Owner: $ownerName • Your private disposable inbox is active"
-        val bigText = "Welcome to Temp Mail AI!\nApp Owner & Creator: $ownerName\nआपका सुरक्षित और प्राइवेट डिस्पोजेबल ईमेल तैयार है। OTP और वेरिफिकेशन लिंक तुरंत प्राप्त करें।"
+        val title = "Welcome • TempMail Console"
+        val shortText = "App Owner: $ownerName • Live SMTP Inbox Active"
+        val bigText = "App Owner & Developer: $ownerName\nआपका रियल SMTP डिस्पोजेबल इनबॉक्स एक्टिव है। किसी भी वेबसाइट या ऐप का रियल OTP और वेरिफिकेशन कोड तुरंत प्राप्त करें।"
 
         val builder = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_dialog_email)

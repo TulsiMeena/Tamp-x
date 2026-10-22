@@ -81,4 +81,14 @@ interface TempMailDao {
 
     @Query("DELETE FROM mailboxes")
     suspend fun clearAllMailboxes()
+
+    @Query(
+        """
+        DELETE FROM emails 
+        WHERE `from` LIKE '%guerrillamail.com%' 
+           OR `from` LIKE '%security-noreply@verification-service.com%'
+           OR subject LIKE '%Welcome to Guerrilla Mail%'
+        """
+    )
+    suspend fun purgeSystemWelcomeAndFakeEmails()
 }

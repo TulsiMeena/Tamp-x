@@ -14,13 +14,14 @@ import com.squareup.moshi.Types
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
-import java.util.UUID
+import java.util.Collections
 
 class TempMailRepository(
     private val dao: TempMailDao,
     private val apiService: TempMailApiService = TempMailApiService.create(),
     private val guerrillaApiService: GuerrillaMailApiService = GuerrillaMailApiService.create(),
-    private val mailTmApiService: MailTmApiService = MailTmApiService.create(),
+    private val mailTmApiService: MailTmApiService = MailTmApiService.create(MailTmApiService.MAIL_TM_BASE_URL),
+    private val mailGwApiService: MailTmApiService = MailTmApiService.create(MailTmApiService.MAIL_GW_BASE_URL),
     private val geminiService: GeminiApiService,
     private val notificationHelper: NotificationHelper
 ) {
@@ -28,6 +29,20 @@ class TempMailRepository(
     private val moshi = Moshi.Builder().build()
     private val stringListAdapter = moshi.adapter<List<String>>(
         Types.newParameterizedType(List::class.java, String::class.java)
+    )
+
+    private val mailTmDomainsCache = Collections.synchronizedSet(mutableSetOf<String>())
+    private val mailGwDomainsCache = Collections.synchronizedSet(mutableSetOf<String>())
+
+    private val guerrillaDomains = listOf(
+        "sharklasers.com",
+        "guerrillamailblock.com",
+        "grr.la",
+        "pokemail.net",
+        "spam4.me",
+        "guerrillamail.com",
+        "guerrillamail.net",
+        "guerrillamail.org"
     )
 
     val allMailboxes: Flow<List<MailboxEntity>> = dao.getAllMailboxes()
@@ -41,129 +56,232 @@ class TempMailRepository(
         return dao.getEmailById(id, address)
     }
 
-    suspend fun getAvailableDomains(): List<String> = withContext(Dispatchers.IO) {
-        val defaultList = mutableListOf(
-            "guerrillamailblock.com",
-            "guerrillamail.com",
-            "sharklasers.com",
-            "guerrillamail.net",
-            "guerrillamail.org",
-            "grr.la",
-            "pokemail.net",
-            "spam4.me",
-            "web-library.net"
-        )
+    suspend fun purgeFakeAndWelcomeEmails() = withContext(Dispatchers.IO) {
         try {
-            val mailTmDomains = mailTmApiService.getDomains().member?.mapNotNull { it.domain } ?: emptyList()
-            mailTmDomains.forEach { d ->
-                if (!defaultList.contains(d)) defaultList.add(d)
-            }
+            dao.purgeSystemWelcomeAndFakeEmails()
         } catch (e: Exception) {
             e.printStackTrace()
         }
-        defaultList
     }
 
-    private fun isMailTmDomain(domain: String): Boolean {
-        return domain.contains("web-library.net") || domain.contains("mail.tm")
+    suspend fun getAvailableDomains(): List<String> = withContext(Dispatchers.IO) {
+        val liveDomains = mutableListOf<String>()
+
+        // 1. Fetch live OTP-ready domains from Mail.tm
+        try {
+            val tmList = mailTmApiService.getDomains().member
+                ?.filter { it.isActive != false && !it.domain.isNullOrBlank() }
+                ?.mapNotNull { it.domain?.lowercase()?.trim() }
+                ?: emptyList()
+            mailTmDomainsCache.addAll(tmList)
+            tmList.forEach { if (!liveDomains.contains(it)) liveDomains.add(it) }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        // 2. Fetch live OTP-ready domains from Mail.gw
+        try {
+            val gwList = mailGwApiService.getDomains().member
+                ?.filter { it.isActive != false && !it.domain.isNullOrBlank() }
+                ?.mapNotNull { it.domain?.lowercase()?.trim() }
+                ?: emptyList()
+            mailGwDomainsCache.addAll(gwList)
+            gwList.forEach { if (!liveDomains.contains(it)) liveDomains.add(it) }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        // 3. Append Guerrilla Mail domains
+        guerrillaDomains.forEach { d ->
+            if (!liveDomains.contains(d)) liveDomains.add(d)
+        }
+
+        liveDomains
+    }
+
+    private fun isGuerrillaDomain(domain: String): Boolean {
+        val clean = domain.lowercase().trim()
+        return guerrillaDomains.any { it.equals(clean, ignoreCase = true) }
     }
 
     private fun getSiteParam(domain: String): String? {
-        return when (domain.lowercase()) {
+        return when (domain.lowercase().trim()) {
             "sharklasers.com" -> "sharklasers.com"
-            "guerrillamail.com" -> "guerrillamail.com"
-            else -> null
+            "guerrillamailblock.com" -> "guerrillamailblock.com"
+            "grr.la" -> "grr.la"
+            "pokemail.net" -> "pokemail.net"
+            "spam4.me" -> "spam4.me"
+            "guerrillamail.net" -> "guerrillamail.net"
+            "guerrillamail.org" -> "guerrillamail.org"
+            else -> "guerrillamail.com"
         }
+    }
+
+    private fun isGuerrillaSystemWelcomeEmail(
+        rawId: String,
+        from: String,
+        subject: String,
+        body: String
+    ): Boolean {
+        if (rawId == "1") return true
+        val lowerFrom = from.lowercase()
+        val lowerSub = subject.lowercase()
+        val lowerBody = body.lowercase()
+        if (lowerFrom.contains("guerrillamail.com") && lowerSub.contains("welcome")) return true
+        if (lowerFrom.contains("no-reply@guerrillamail")) return true
+        if (lowerSub.contains("welcome to guerrilla mail")) return true
+        if (lowerBody.contains("thank you for using guerrilla mail")) return true
+        return false
     }
 
     suspend fun createRandomMailbox(): MailboxEntity = withContext(Dispatchers.IO) {
-        val prefixes = listOf("user", "mail", "alex", "john", "box", "inbox", "fast", "temp")
-        val randomLogin = prefixes.random() + "_" + (100000..999999).random()
-        val domain = "web-library.net"
+        dao.purgeSystemWelcomeAndFakeEmails()
 
-        val generatedPass = "pass_" + (100000..999999).random()
-        val fullAddress = "$randomLogin@$domain"
+        val prefixes = listOf("amit", "dev", "verify", "auth", "user", "inbox", "core", "mail")
+        val randomLogin = "${prefixes.random()}${(10000..99999).random()}"
+        val generatedPass = "Pwd_${(100000..999999).random()}!"
 
-        var sidToken: String? = null
-        var passwordStr: String? = generatedPass
+        // Ensure domain caches are populated
+        if (mailTmDomainsCache.isEmpty() && mailGwDomainsCache.isEmpty()) {
+            getAvailableDomains()
+        }
 
-        try {
-            mailTmApiService.createAccount(MailTmAccountRequest(fullAddress, generatedPass))
-            val tokenResp = mailTmApiService.getToken(MailTmAccountRequest(fullAddress, generatedPass))
-            sidToken = tokenResp.token
-        } catch (e: Exception) {
-            e.printStackTrace()
-            // Fallback to Guerrilla Mail if mail.tm fails
-            val gDomain = "sharklasers.com"
-            val gAddr = "$randomLogin@$gDomain"
+        // 1. Try Mail.tm live domain first (best for real OTP verification codes)
+        val tmDomain = mailTmDomainsCache.firstOrNull()
+        if (!tmDomain.isNullOrBlank()) {
+            val fullAddress = "$randomLogin@$tmDomain"
             try {
-                val response = guerrillaApiService.setEmailUser(randomLogin, site = getSiteParam(gDomain))
-                sidToken = response.sidToken
-            } catch (ex: Exception) {
-                ex.printStackTrace()
-            }
-            passwordStr = null
-            return@withContext MailboxEntity(
-                address = gAddr,
-                login = randomLogin,
-                domain = gDomain,
-                sidToken = sidToken,
-                password = null,
-                createdAt = System.currentTimeMillis(),
-                isActive = true
-            ).also {
-                dao.setActiveMailbox(it.address)
-                dao.insertMailbox(it)
+                mailTmApiService.createAccount(MailTmAccountRequest(fullAddress, generatedPass))
+                val tokenResp = mailTmApiService.getToken(MailTmAccountRequest(fullAddress, generatedPass))
+                val jwt = tokenResp.token
+                if (!jwt.isNullOrBlank()) {
+                    val mailbox = MailboxEntity(
+                        address = fullAddress,
+                        login = randomLogin,
+                        domain = tmDomain,
+                        sidToken = jwt,
+                        password = "tm:$generatedPass",
+                        createdAt = System.currentTimeMillis(),
+                        isActive = true
+                    )
+                    dao.setActiveMailbox(mailbox.address)
+                    dao.insertMailbox(mailbox)
+                    return@withContext mailbox
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
             }
         }
 
-        val mailbox = MailboxEntity(
-            address = fullAddress,
+        // 2. Try Mail.gw live domain second
+        val gwDomain = mailGwDomainsCache.firstOrNull()
+        if (!gwDomain.isNullOrBlank()) {
+            val fullAddress = "$randomLogin@$gwDomain"
+            try {
+                mailGwApiService.createAccount(MailTmAccountRequest(fullAddress, generatedPass))
+                val tokenResp = mailGwApiService.getToken(MailTmAccountRequest(fullAddress, generatedPass))
+                val jwt = tokenResp.token
+                if (!jwt.isNullOrBlank()) {
+                    val mailbox = MailboxEntity(
+                        address = fullAddress,
+                        login = randomLogin,
+                        domain = gwDomain,
+                        sidToken = jwt,
+                        password = "gw:$generatedPass",
+                        createdAt = System.currentTimeMillis(),
+                        isActive = true
+                    )
+                    dao.setActiveMailbox(mailbox.address)
+                    dao.insertMailbox(mailbox)
+                    return@withContext mailbox
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+
+        // 3. Fallback to Guerrilla Mail (with welcome message filtering)
+        val gDomain = "sharklasers.com"
+        val gAddr = "$randomLogin@$gDomain"
+        var sidToken: String? = null
+        try {
+            val response = guerrillaApiService.setEmailUser(randomLogin, site = getSiteParam(gDomain))
+            sidToken = response.sidToken
+        } catch (ex: Exception) {
+            ex.printStackTrace()
+        }
+
+        MailboxEntity(
+            address = gAddr,
             login = randomLogin,
-            domain = domain,
+            domain = gDomain,
             sidToken = sidToken,
-            password = passwordStr,
+            password = null,
             createdAt = System.currentTimeMillis(),
             isActive = true
-        )
-
-        dao.setActiveMailbox(mailbox.address)
-        dao.insertMailbox(mailbox)
-        mailbox
+        ).also {
+            dao.setActiveMailbox(it.address)
+            dao.insertMailbox(it)
+        }
     }
 
     suspend fun createCustomMailbox(login: String, domain: String): MailboxEntity = withContext(Dispatchers.IO) {
-        val cleanLogin = login.lowercase().trim().filter { it.isLetterOrDigit() || it == '.' || it == '_' }
-            .ifBlank { "user_" + (100000..999999).random() }
+        dao.purgeSystemWelcomeAndFakeEmails()
+
+        val cleanDomain = domain.lowercase().trim().removePrefix("@")
+        var cleanLogin = login.lowercase().trim()
+            .filter { it.isLetterOrDigit() || it == '.' || it == '_' || it == '-' }
+            .ifBlank { "user${(1000..9999).random()}" }
+
+        if (mailTmDomainsCache.isEmpty() && mailGwDomainsCache.isEmpty()) {
+            getAvailableDomains()
+        }
 
         var sidToken: String? = null
         var passwordStr: String? = null
 
-        if (isMailTmDomain(domain)) {
-            val generatedPass = "pass_" + (100000..999999).random()
-            val fullAddr = "$cleanLogin@$domain"
+        if (!isGuerrillaDomain(cleanDomain)) {
+            val generatedPass = "Pwd_${(100000..999999).random()}!"
+            val useGw = mailGwDomainsCache.contains(cleanDomain) && !mailTmDomainsCache.contains(cleanDomain)
+            val targetService = if (useGw) mailGwApiService else mailTmApiService
+            val prefix = if (useGw) "gw:" else "tm:"
+
+            var fullAddr = "$cleanLogin@$cleanDomain"
             try {
-                mailTmApiService.createAccount(MailTmAccountRequest(fullAddr, generatedPass))
-                val tokenResp = mailTmApiService.getToken(MailTmAccountRequest(fullAddr, generatedPass))
+                targetService.createAccount(MailTmAccountRequest(fullAddr, generatedPass))
+                val tokenResp = targetService.getToken(MailTmAccountRequest(fullAddr, generatedPass))
                 sidToken = tokenResp.token
-                passwordStr = generatedPass
+                passwordStr = "$prefix$generatedPass"
             } catch (e: Exception) {
-                e.printStackTrace()
+                // If username is already taken on public domain, append short numeric tag so it works reliably
+                try {
+                    cleanLogin = "${cleanLogin}${(10..99).random()}"
+                    fullAddr = "$cleanLogin@$cleanDomain"
+                    targetService.createAccount(MailTmAccountRequest(fullAddr, generatedPass))
+                    val tokenResp = targetService.getToken(MailTmAccountRequest(fullAddr, generatedPass))
+                    sidToken = tokenResp.token
+                    passwordStr = "$prefix$generatedPass"
+                } catch (ex: Exception) {
+                    ex.printStackTrace()
+                }
             }
         } else {
             try {
-                val response = guerrillaApiService.setEmailUser(cleanLogin, site = getSiteParam(domain))
+                val response = guerrillaApiService.setEmailUser(
+                    emailUser = cleanLogin,
+                    site = getSiteParam(cleanDomain)
+                )
                 sidToken = response.sidToken
             } catch (e: Exception) {
                 e.printStackTrace()
             }
         }
 
-        val fullAddress = "$cleanLogin@$domain"
+        val finalAddress = "$cleanLogin@$cleanDomain"
         val mailbox = MailboxEntity(
-            address = fullAddress,
+            address = finalAddress,
             login = cleanLogin,
-            domain = domain,
+            domain = cleanDomain,
             sidToken = sidToken,
             password = passwordStr,
             createdAt = System.currentTimeMillis(),
@@ -190,17 +308,23 @@ class TempMailRepository(
         showNotifications: Boolean = true
     ): Result<Int> = withContext(Dispatchers.IO) {
         try {
+            dao.purgeSystemWelcomeAndFakeEmails()
+
             val existingEmails = dao.getEmailsForMailboxSync(mailbox.address)
             val existingIds = existingEmails.map { it.id }.toSet()
             var newCount = 0
 
-            // 1. Mail.tm Engine
-            if (isMailTmDomain(mailbox.domain)) {
+            // 1. Mail.tm / Mail.gw Live SMTP Engine
+            if (!isGuerrillaDomain(mailbox.domain) || !mailbox.password.isNullOrBlank()) {
+                val rawPass = mailbox.password?.removePrefix("tm:")?.removePrefix("gw:")
+                val isGw = mailbox.password?.startsWith("gw:") == true || mailGwDomainsCache.contains(mailbox.domain)
+                val primaryService = if (isGw) mailGwApiService else mailTmApiService
+
                 var jwtToken = mailbox.sidToken
-                if (jwtToken.isNullOrBlank() && !mailbox.password.isNullOrBlank()) {
+                if (jwtToken.isNullOrBlank() && !rawPass.isNullOrBlank()) {
                     try {
-                        val tokenResp = mailTmApiService.getToken(
-                            MailTmAccountRequest(mailbox.address, mailbox.password)
+                        val tokenResp = primaryService.getToken(
+                            MailTmAccountRequest(mailbox.address, rawPass)
                         )
                         jwtToken = tokenResp.token
                         if (!jwtToken.isNullOrBlank()) {
@@ -211,16 +335,33 @@ class TempMailRepository(
                     }
                 }
 
+                // If mailbox had no token (e.g. old domain), try registering it now
+                if (jwtToken.isNullOrBlank()) {
+                    val newPass = rawPass ?: "Pwd_${(100000..999999).random()}!"
+                    try {
+                        primaryService.createAccount(MailTmAccountRequest(mailbox.address, newPass))
+                    } catch (_: Exception) {}
+                    try {
+                        val tokenResp = primaryService.getToken(MailTmAccountRequest(mailbox.address, newPass))
+                        jwtToken = tokenResp.token
+                        if (!jwtToken.isNullOrBlank()) {
+                            val prefix = if (isGw) "gw:" else "tm:"
+                            dao.insertMailbox(mailbox.copy(sidToken = jwtToken, password = "$prefix$newPass"))
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+
                 if (!jwtToken.isNullOrBlank()) {
-                    val messages = mailTmApiService.getMessages("Bearer $jwtToken").member ?: emptyList()
+                    val messages = primaryService.getMessages("Bearer $jwtToken").member ?: emptyList()
                     for (msg in messages) {
                         val rawId = msg.id ?: continue
                         val intId = rawId.hashCode()
 
                         if (!existingIds.contains(intId)) {
-                            newCount++
                             val detail = try {
-                                mailTmApiService.getMessageDetail(rawId, "Bearer $jwtToken")
+                                primaryService.getMessageDetail(rawId, "Bearer $jwtToken")
                             } catch (e: Exception) {
                                 null
                             }
@@ -231,6 +372,8 @@ class TempMailRepository(
 
                             val bodyText = detail?.text ?: detail?.intro ?: msg.intro ?: ""
                             val bodyHtml = detail?.html?.firstOrNull() ?: ""
+
+                            newCount++
 
                             val aiResult = if (autoAiSummarize) {
                                 try {
@@ -261,7 +404,7 @@ class TempMailRepository(
 
                             if (showNotifications) {
                                 notificationHelper.sendNewEmailNotification(
-                                    title = "New Email from $safeFrom",
+                                    title = "New Email • $safeFrom",
                                     message = safeSubject,
                                     emailId = intId
                                 )
@@ -272,7 +415,7 @@ class TempMailRepository(
                 }
             }
 
-            // 2. Guerrilla Mail Engine
+            // 2. Guerrilla Mail Engine (Strictly filtering out Guerrilla's fake welcome email)
             var currentSidToken = mailbox.sidToken
             try {
                 val setUserResp = guerrillaApiService.setEmailUser(
@@ -309,10 +452,21 @@ class TempMailRepository(
 
                     for (item in distinctItems) {
                         val rawId = item.mailId?.toString() ?: continue
+                        val previewFrom = item.mailFrom ?: ""
+                        val previewSubject = item.mailSubject ?: ""
+                        val previewExcerpt = item.mailExcerpt ?: item.mailBody ?: ""
+
+                        // Skip & delete Guerrilla Mail's built-in fake welcome message
+                        if (isGuerrillaSystemWelcomeEmail(rawId, previewFrom, previewSubject, previewExcerpt)) {
+                            try {
+                                guerrillaApiService.delEmail(rawId, currentSidToken)
+                            } catch (_: Exception) {}
+                            continue
+                        }
+
                         val intId = rawId.toIntOrNull() ?: rawId.hashCode()
 
                         if (!existingIds.contains(intId)) {
-                            newCount++
                             val detail = try {
                                 guerrillaApiService.fetchEmail(rawId, currentSidToken)
                             } catch (e: Exception) {
@@ -324,6 +478,12 @@ class TempMailRepository(
                             val safeDate = detail?.mailDate ?: item.mailDate ?: "Just Now"
 
                             val rawBody = detail?.mailBody ?: item.mailBody ?: item.mailExcerpt ?: ""
+                            if (isGuerrillaSystemWelcomeEmail(rawId, safeFrom, safeSubject, rawBody)) {
+                                continue
+                            }
+
+                            newCount++
+
                             val bodyHtml = if (rawBody.contains("<") && rawBody.contains(">")) rawBody else ""
                             val bodyText = if (bodyHtml.isNotBlank()) rawBody.replace(Regex("<[^>]*>"), "") else rawBody
 
@@ -356,7 +516,7 @@ class TempMailRepository(
 
                             if (showNotifications) {
                                 notificationHelper.sendNewEmailNotification(
-                                    title = "New Email from $safeFrom",
+                                    title = "New Email • $safeFrom",
                                     message = safeSubject,
                                     emailId = intId
                                 )
@@ -416,46 +576,5 @@ class TempMailRepository(
     suspend fun clearAllData() = withContext(Dispatchers.IO) {
         dao.clearAllEmails()
         dao.clearAllMailboxes()
-    }
-
-    suspend fun injectTestVerificationEmail(address: String): EmailEntity = withContext(Dispatchers.IO) {
-        val testOtpCode = (100000..999999).random().toString()
-        val generatedId = (System.currentTimeMillis() % 1000000).toInt()
-
-        val email = EmailEntity(
-            id = generatedId,
-            mailboxAddress = address,
-            from = "security-noreply@verification-service.com",
-            subject = "Your Verification Code is $testOtpCode",
-            date = "Just Now",
-            timestamp = System.currentTimeMillis(),
-            bodyHtml = """
-                <div style="font-family: Arial, sans-serif; padding: 20px;">
-                    <h2>Account Security & Email Verification</h2>
-                    <p>Thank you for using our service. Your one-time login verification code is:</p>
-                    <div style="font-size: 28px; font-weight: bold; color: #2563EB; letter-spacing: 4px; margin: 16px 0;">$testOtpCode</div>
-                    <p>Or click the link below to confirm your email instantly:</p>
-                    <p><a href="https://example.com/verify?token=${UUID.randomUUID()}&code=$testOtpCode" style="color: #2563EB; font-weight: bold;">Verify Email Address Now</a></p>
-                    <p style="color: #64748B; font-size: 12px; margin-top: 24px;">If you did not request this, please ignore this email.</p>
-                </div>
-            """.trimIndent(),
-            bodyText = "Your verification code is $testOtpCode. Click here to verify: https://example.com/verify?code=$testOtpCode",
-            isRead = false,
-            aiSummary = "Official account verification message containing single-use OTP code $testOtpCode and account confirmation link.",
-            aiSpamScore = 5,
-            aiSpamReason = "Safe legitimate authentication message from verified security service.",
-            aiSmartRepliesJson = stringListAdapter.toJson(listOf("Copied code $testOtpCode", "Verified link received", "Thank you!")),
-            attachmentsJson = null
-        )
-
-        dao.insertEmail(email)
-
-        notificationHelper.sendNewEmailNotification(
-            title = "Test Verification Email Received",
-            message = "Code: $testOtpCode",
-            emailId = generatedId
-        )
-
-        email
     }
 }

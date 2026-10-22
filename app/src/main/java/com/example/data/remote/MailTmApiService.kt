@@ -40,9 +40,10 @@ interface MailTmApiService {
     ): MailTmMessageDetail
 
     companion object {
-        private const val BASE_URL = "https://api.mail.tm/"
+        const val MAIL_TM_BASE_URL = "https://api.mail.tm/"
+        const val MAIL_GW_BASE_URL = "https://api.mail.gw/"
 
-        fun create(): MailTmApiService {
+        fun create(baseUrl: String = MAIL_TM_BASE_URL): MailTmApiService {
             val logging = HttpLoggingInterceptor().apply {
                 level = HttpLoggingInterceptor.Level.BASIC
             }
@@ -59,7 +60,7 @@ interface MailTmApiService {
                 .build()
 
             return Retrofit.Builder()
-                .baseUrl(BASE_URL)
+                .baseUrl(baseUrl)
                 .client(client)
                 .addConverterFactory(MoshiConverterFactory.create(moshi))
                 .build()
