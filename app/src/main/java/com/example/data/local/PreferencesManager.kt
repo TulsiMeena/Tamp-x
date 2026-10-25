@@ -21,6 +21,7 @@ class PreferencesManager(private val context: Context) {
         val PUSH_NOTIFICATIONS = booleanPreferencesKey("push_notifications")
         val AUTO_AI_SUMMARIZE = booleanPreferencesKey("auto_ai_summarize")
         val THEME_MODE = stringPreferencesKey("theme_mode")
+        val FIVE_SIM_API_KEY = stringPreferencesKey("five_sim_api_key")
     }
 
     val autoRefreshEnabled: Flow<Boolean> = context.dataStore.data.map { prefs ->
@@ -43,6 +44,10 @@ class PreferencesManager(private val context: Context) {
         prefs[THEME_MODE] ?: "SYSTEM"
     }
 
+    val userFiveSimApiKey: Flow<String> = context.dataStore.data.map { prefs ->
+        prefs[FIVE_SIM_API_KEY] ?: ""
+    }
+
     suspend fun setAutoRefreshEnabled(enabled: Boolean) {
         context.dataStore.edit { prefs -> prefs[AUTO_REFRESH_ENABLED] = enabled }
     }
@@ -61,5 +66,9 @@ class PreferencesManager(private val context: Context) {
 
     suspend fun setThemeMode(mode: String) {
         context.dataStore.edit { prefs -> prefs[THEME_MODE] = mode }
+    }
+
+    suspend fun setUserFiveSimApiKey(apiKey: String) {
+        context.dataStore.edit { prefs -> prefs[FIVE_SIM_API_KEY] = apiKey.trim() }
     }
 }
